@@ -18,3 +18,4 @@ jobs:
         with:
           python-version: "3.12"
       - uses: pre-commit/action@v3.0.1
+      - run: sh tests/test_euler_jobs.sh

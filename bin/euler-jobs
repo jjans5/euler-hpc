@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""List your Slurm jobs grouped by the Claude Code session that submitted them.
+
+The plugin's SessionStart hook tags every job a session submits with `--comment=claude:<session id prefix>` and
+records the session (directory, tmux window, transcript, host, process) in the plugin's data directory. This joins
+`squeue` (queued and running jobs) and `sacct` (jobs that ended recently) with those records.
+Standard library only.
+"""
+
+import argparse
+import glob
+import os
+import socket
+import subprocess
+import time
+from pathlib import Path
+
+TAG = "claude:"
+
+
+def run(cmd: list[str]) -> list[str]:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=60, check=True).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
+def jobs(hours: int) -> list[dict]:
+    """Queued and running jobs, then jobs that ended in the last ``hours``; the comment is the last field."""
+    keys = ("id", "name", "state", "time", "limit", "info", "comment")
+    rows = [dict(zip(keys, line.split("|", 6))) for line in run(["squeue", "--me", "-h", "-o", "%i|%j|%T|%M|%l|%R|%k"])]
+    queued = {r["id"] for r in rows}
+    sacct = [
+        "sacct", "-X", "-n", "-P", f"--starttime=now-{hours}hours",
+        "--format=JobID,JobName,State,Elapsed,Timelimit,End,Comment",
+    ]  # fmt: skip
+    for line in run(sacct):
+        r = dict(zip(keys, line.split("|", 6)))
+        if r["id"] not in queued and r["state"] not in ("PENDING", "RUNNING"):
+            r["info"] = f"ended {r['info'][-8:-3]}" if "T" in r["info"] else ""
+            rows.append(r)
+    for r in rows:
+        r["state"] = r.get("state", "").split(" ")[0]  # "CANCELLED by <uid>"
+        r["comment"] = r.get("comment", "").strip()
+        if r["comment"] in ("(null)", "None"):
+            r["comment"] = ""
+    return rows
+
+
+def sessions(data: list[Path]) -> dict[str, dict]:
+    """Recorded sessions by full id."""
+    found = {}
+    for directory in data:
+        for path in directory.glob("*"):
+            entry = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
+            if entry.get("session"):
+                found[entry["session"]] = entry
+    return found
+
+
+def status(entry: dict) -> str:
+    """Whether the session's process is alive, and when its transcript last changed."""
+    if entry.get("host") != socket.gethostname():
+        alive = f"on {entry.get('host', '?')}"
+    else:
+        try:
+            comm = Path(f"/proc/{entry.get('pid')}/comm").read_text().strip()
+            alive = "open" if comm == "claude" else "closed"
+        except OSError:
+            alive = "closed"
+    try:
+        minutes = int((time.time() - os.path.getmtime(entry["transcript"])) / 60)
+        active = f"active {minutes}m ago" if minutes < 120 else f"active {minutes // 60}h ago"
+    except (KeyError, OSError):
+        active = "no transcript"
+    return f"{alive}, {active}"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--mine", action="store_true", help="only this session's jobs")
+    parser.add_argument("--session", default=os.environ.get("EULER_HPC_SESSION", ""), help="this session's id")
+    parser.add_argument("--hours", type=int, default=24, help="how far back to list ended jobs (default 24)")
+    args = parser.parse_args()
+
+    own = args.session
+    data = [Path(os.environ["EULER_HPC_DATA"])] if os.environ.get("EULER_HPC_DATA") else []
+    data += [Path(p) for p in glob.glob(str(Path.home() / ".claude/plugins/data/euler-hpc*/sessions"))]
+    known = sessions(list(dict.fromkeys(data)))
+
+    groups: dict[str, list[dict]] = {}
+    for job in jobs(args.hours):
+        prefix = job["comment"][len(TAG):] if job["comment"].startswith(TAG) else ""
+        groups.setdefault(prefix, []).append(job)
+    if args.mine:
+        groups = {p: js for p, js in groups.items() if p and own.startswith(p)}
+    if not groups:
+        print("No jobs.")
+        return
+
+    # Jobs that sessions run inside (an euler-tunnel or JupyterHub job), so nobody cancels them by mistake
+    hosts: dict[str, list[str]] = {}
+    for sid, entry in known.items():
+        if entry.get("job") and (sid == own or status(entry).startswith("open")):
+            hosts.setdefault(entry["job"], []).append(sid[:8])
+    for js in groups.values():
+        for j in js:
+            if j["id"] in hosts:
+                j["info"] += f"  hosts session {', '.join(hosts[j['id']])}"
+
+    home = str(Path.home())
+    for prefix in sorted(groups, key=lambda p: (p == "", p)):
+        if prefix:
+            entry = next((e for sid, e in known.items() if sid.startswith(prefix)), {})
+            where = entry.get("cwd", "?").replace(home, "~", 1)
+            window = f"  tmux {entry['tmux']}" if entry.get("tmux") else ""
+            this = "  <- this session" if own.startswith(prefix) else ""
+            state = status(entry) if entry else "unknown session"
+            print(f"Session {prefix}{window}  {where}  ({state}){this}")
+        else:
+            print("Not from a tagged Claude session")
+        for j in groups[prefix]:
+            print(f"  {j['id']:<16} {j['name'][:24]:<24} {j['state']:<11} {j['time']:>11} / {j['limit']:<11} {j['info']}")
+        print()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,7 @@
 {
   "name": "euler-hpc",
-  "version": "0.1.1",
-  "description": "Work with coding agents on ETH Zurich's Euler cluster: the session's node, allocation and cluster basics at session start, and a skill for Slurm batch jobs, job arrays, GPU jobs and interactive allocations.",
+  "version": "0.2.0",
+  "description": "Run coding agents efficiently on ETH Zurich's Euler cluster: the session's node, allocation, storage rules and your own setup at session start; a skill for Slurm jobs, software and data; and an overview of jobs by the session that submitted them.",
   "author": {
     "name": "quadbio"
   },
@@ -20,6 +20,21 @@
       "title": "Fallback GPU model",
       "description": "Model to try when the default queues too long. Blank: the agent asks.",
       "default": "rtx_3090"
+    },
+    "group": {
+      "type": "string",
+      "title": "Shareholder group",
+      "description": "Your group's storage name, as in /cluster/project/<group>. Blank: not shown."
+    },
+    "work_root": {
+      "type": "directory",
+      "title": "Work root",
+      "description": "Where your repositories and work live. Blank: not shown."
+    },
+    "notes": {
+      "type": "string",
+      "title": "Notes for the agent",
+      "description": "Facts about your own Euler setup, on one line, separated by semicolons, e.g. where shared datasets live. Blank: none."
     }
   }
 }

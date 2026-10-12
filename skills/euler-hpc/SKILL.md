@@ -1,19 +1,23 @@
 ---
 name: euler-hpc
 description: >-
-  Write, submit, and monitor Slurm jobs on ETH Zurich's Euler cluster — sbatch scripts, job arrays, GPU jobs,
-  interactive allocations, and the submit → squeue/sacct → logs loop. Use once work is going through Slurm;
-  whether to run inline instead is decided before this skill. Trigger on "run this on the cluster", "submit a
-  job", "sbatch this", "run on a GPU", "run this for every sample", "queue this on Euler", "hold a node", "is my
-  job done?", "why did my job fail?". Cluster basics (which node, modules, storage, internet) come from this
-  plugin's session-start context, not from this skill.
+  Run work on ETH Zurich's Euler cluster efficiently: Slurm batch jobs, job arrays, GPU jobs, interactive
+  allocations and the submit → monitor → logs loop, which session submitted which job, installing software and
+  Python environments, containers, moving data in and out. Trigger on "run this on the cluster", "submit a job",
+  "sbatch this", "run on a GPU", "run this for every sample", "hold a node", "is my job done?", "why did my job
+  fail?", "which session started this job?", "install X on Euler", "copy this to/from Euler". The rules for every
+  session (node, allocation, storage, snapshots, cancelling) come from this plugin's session-start context.
 ---
 
-# Euler Slurm jobs
+# Euler HPC
 
-Three shapes: one **batch job**, a **job array** for many near-identical items, or an **interactive allocation**
-to iterate on a node. Each has a section below. Cluster basics are in the session-start context; if it is
-missing, read `${CLAUDE_PLUGIN_ROOT}/hooks/session_context.md`.
+How to run work on Euler. The session-start context holds the rules for every session; if it is missing, read
+`${CLAUDE_PLUGIN_ROOT}/hooks/session_context.md`. Docs paths below are relative to https://docs.hpc.ethz.ch; read
+the page when you need more than the summary here.
+
+Work that doesn't fit this session's allocation takes one of three shapes: one **batch job**, a **job array** for
+many near-identical items, or an **interactive allocation** to iterate on a node. Each has a section below.
+Reference: `/batchsystem/slurm/`.
 
 ## Writing the job script
 
@@ -99,14 +103,15 @@ echo "submitted $JOBID"
   user, and duplicate checks and lookups go by name.
 - **Avoid duplicates:** before submitting, `squeue --me --name=<jobname>` — if one is already `PD`/`R`, don't
   resubmit.
-- **Only cancel jobs you submitted.** Never `scancel --me`, and never the job this session runs in
-  (`$SLURM_JOB_ID`): other jobs under your user may be a live session or a long run, and cancelling one is
-  unrecoverable.
+- **Which session submitted what:** `sbatch` and `salloc` run from this session's shell tag the job with
+  `--comment=$EULER_HPC_TAG`; a script that calls `sbatch` itself should pass that flag too. `euler-jobs --mine`
+  lists this session's jobs, `euler-jobs` everyone's by session (the user runs it as `/euler-hpc:jobs`).
+- **Chain steps:** `sbatch -d afterok:"$JOBID" next.sh` starts only after that job succeeded.
 - **Poll, never block.** Do **not** use `tail -f` or `watch` — they hang a tool call until timeout. Take
   snapshots instead:
 
   ```bash
-  squeue --me                       # or `myjobs` (Euler's readable squeue)
+  euler-jobs --mine                 # this session's jobs; `myjobs -j "$JOBID"` for one job's details
   sacct -j "$JOBID" --format=JobID,State,Elapsed,MaxRSS,ReqMem,ExitCode
   sstat -j "$JOBID"                 # live usage of a RUNNING job
   tail -n 40 logs/<jobname>-"$JOBID".out
@@ -114,6 +119,8 @@ echo "submitted $JOBID"
 
   Cadence: ~30–60 s for short jobs, a few minutes for long ones. Stop when `sacct` `State` leaves
   `PENDING`/`RUNNING`. Cancel with `scancel "$JOBID"`.
+- **Right-size the next run:** compare `MaxRSS` and `Elapsed` with what you asked for;
+  `get_inefficient_jobs --for-last-hours 24` lists your jobs that wasted CPU, RAM or GPU.
 
 ## When a job fails — symptom → cause → fix
 
@@ -129,6 +136,7 @@ success). `MaxRSS` is in KB unless suffixed.
 | `CUDA out of memory` in log | GPU VRAM | raise `--gres=gpumem` (or smaller batch / bigger card) |
 | `TIMEOUT` | walltime too low | raise `--time` |
 | network hang/timeout on download | no `eth_proxy` | `module load eth_proxy` |
+| `CANCELLED` right at start, no output | job startup took over 120 s, e.g. a slow `~/.bashrc` (conda init on work storage) | slim the shell startup (`/news/2026-01-12-slurm-upgrade/`) |
 | GPU job never schedules | model/VRAM your share can't provide | another model (`sbatch --test-only`); check `my_share_info` |
 
 ## Job arrays (parallel, one task per item)
@@ -199,13 +207,41 @@ If `$SLURM_JOB_ID` is set (the session-start context says so), this session is i
   env $(env | sed -n 's/^\(SLURM_[A-Z0-9_]*\)=.*/-u \1/p') srun --jobid="$JID" --overlap -n1 bash -c '<command>'
   ```
 
+## Software
+
+- **Modules:** if `module avail` doesn't list a package, `module spider <name>` shows what to load first. The
+  newest stack can be Spack-only, without modules. (`/software/environment-modules/`, `/software/software-stack/`)
+- **Python:** use the project's environment manager (pixi, uv). Without one, a venv on a stack's `python` module.
+  Before Python 3.13, `ThreadPool()` ignores the job's CPU limit: pass `processes=len(os.sched_getaffinity(0))`.
+  (`/software/proglang/python/`)
+- **Conda:** avoid. If unavoidable, never on work storage (Lustre handles many small files badly), and mind home's
+  file quota. (`/software/package-managers/conda/`)
+- **Containers:** Apptainer needs access (`get-access`); point `APPTAINER_CACHEDIR` at scratch; images can't be
+  built on Euler; `--nv` for GPUs. (`/software/apptainer/`)
+
+## Moving data
+
+- `rsync` to or from `euler.ethz.ch` (login nodes); tar many small files first. Globus for large transfers
+  (`/services/globus/`), `rclone` for Polybox on login nodes (`/connections/polybox/`); ask support before
+  terabytes.
+- A directory named `nobackup` is left out of backups. Don't process data in batch jobs directly from external
+  storage. (`/hardware/storage/`)
+
+## What the human runs
+
+- **euler-tunnel:** a batch job the human starts from their machine (`euler-tunnel start --time=…`) to reach a
+  compute node by ssh or VS Code; `euler-tunnel status` shows it. A session inside it ends with that job.
+  (`/connections/euler-tunnel/`)
+- **JupyterHub** sessions are batch jobs too: at most 24 h, and closing the browser doesn't stop them.
+  (`/services/jupyterhub/`)
+
 ## Quick reference
 
 - No `--partition`; `--mem-per-cpu` (never `--mem`); `--time` picks the partition (default 1 h).
 - GPU: `--gpus=<model>:1` (default "${user_config.gpu_model}", fallback "${user_config.gpu_fallback}") +
   `--gres=gpumem:24g` (unit required); omit `--account`.
-- `mkdir -p logs && JOBID=$(sbatch --parsable job.sh)`; monitor with `squeue`/`myjobs`/`sacct`/`sstat` — never
-  `tail -f`. Cancel only your own jobs, never this session's.
+- `mkdir -p logs && JOBID=$(sbatch --parsable job.sh)`; poll `euler-jobs --mine`/`sacct`/`sstat`, never
+  `tail -f`. Cancel only this session's jobs.
 - Job names carry the task (`-J <task>-…`); paths come in at submit, not hardcoded; run scripts the project's way.
 - Parallel per-item work: `--array=0-N%K` + `$SLURM_ARRAY_TASK_ID` + `--output=…%A_%a.out` (or the project's
   sweep launcher).
