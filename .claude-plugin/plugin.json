@@ -1,6 +1,6 @@
 {
   "name": "euler-hpc",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Work with coding agents on ETH Zurich's Euler cluster: the session's node, allocation and cluster basics at session start, and a skill for Slurm batch jobs, job arrays, GPU jobs and interactive allocations.",
   "author": {
     "name": "quadbio"

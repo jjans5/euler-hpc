@@ -8,10 +8,16 @@ cluster setup: read them rather than guess. Always:
    `euler-hpc` skill before writing any `sbatch`, `srun` or `salloc`.
 3. No software stack loads by default: `module load stack/<version>`, then packages; search with `module spider`.
    Take versions from the docs, never hardcode them.
-4. Home (`$HOME`) holds 50 GB and 500k files: keep work, data, environments and package caches (uv, pixi, pip,
-   Hugging Face default to `~/.cache`) out of it. Use the group's project or work storage; `/cluster/scratch/$USER`
-   for transient data (2.5 TB, deleted after about two weeks, no backup); node-local `$TMPDIR` inside a job
-   (deleted when it ends).
-5. Home and project storage keep hourly and daily snapshots. Before declaring anything lost or recomputing anything
-   expensive, look in `<dir>/.snapshot/` (hidden: `ls` won't list it, open it by name) and restore with `cp`.
-   Work, scratch and `$TMPDIR` have none.
+4. Pick storage by what the data needs (table below). Keep work, data, environments and package caches out of home:
+   uv, pixi, pip and Hugging Face default to `~/.cache`.
+5. Before declaring anything lost or recomputing anything expensive, look in `<dir>/.snapshot/` (hidden: `ls` won't
+   list it, open it by name) and restore with `cp`. Anything older: ask the user to request a restore from backup
+   through cluster support.
+
+| Storage | Path | For | Snapshots | Backups | Deleted |
+| --- | --- | --- | --- | --- | --- |
+| home | `$HOME` | personal files; 50 GB, 500k files | hourly, daily | nightly | with the account |
+| project | `/cluster/project/<group>` | long-term, critical data | hourly, daily | several a week, kept 90 days | never |
+| work | `/cluster/work/<group>` | large files, fast I/O | none | several a week | never |
+| scratch | `/cluster/scratch/$USER` | transient data; 2.5 TB, 1M files | none | none | after about two weeks |
+| `$TMPDIR` | node-local, per job | many-small-file I/O in a job | none | none | when the job ends |
