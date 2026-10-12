@@ -1,0 +1,25 @@
+{
+  "name": "euler-hpc",
+  "version": "0.1.0",
+  "description": "Work with coding agents on ETH Zurich's Euler cluster: the session's node, allocation and cluster basics at session start, and a skill for Slurm batch jobs, job arrays, GPU jobs and interactive allocations.",
+  "author": {
+    "name": "quadbio"
+  },
+  "homepage": "https://github.com/quadbio/euler-hpc",
+  "license": "MIT",
+  "keywords": ["euler", "eth-zurich", "hpc", "slurm", "sbatch", "gpu"],
+  "userConfig": {
+    "gpu_model": {
+      "type": "string",
+      "title": "Default GPU model",
+      "description": "Slurm GPU model for GPU jobs, e.g. rtx_4090; one your shareholder group can use. Blank: the agent asks.",
+      "default": "rtx_4090"
+    },
+    "gpu_fallback": {
+      "type": "string",
+      "title": "Fallback GPU model",
+      "description": "Model to try when the default queues too long. Blank: the agent asks.",
+      "default": "rtx_3090"
+    }
+  }
+}

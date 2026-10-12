@@ -1,0 +1,16 @@
+{
+  "description": "On Euler only: this session's node and allocation, and the always-on cluster rules.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
