@@ -47,6 +47,7 @@ chmod +x "$tmp/bin/"*
 
 # Session a: a live process whose shell runs a background command, inside job 102; session b: closed
 q="'\"'\"'"  # how Claude Code quotes a single quote inside the command it evals
+# shellcheck disable=SC2016 # $0 is the inner shell's
 env SLURM_JOB_ID=102 bash -c 'bash -c "$0"; :' "eval 'echo ${q}x${q} > /dev/null; sleep 37' < /dev/null && pwd -P > /dev/null" &
 claude=$!
 until pgrep -P "$claude" >/dev/null; do :; done
