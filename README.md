@@ -56,9 +56,8 @@ sh tests/test_euler_jobs.sh
 
 ## Release
 
-Bump `version` in `.claude-plugin/plugin.json`.
-That is the release: the marketplace follows `main`, users update when the version changes, and the merge tags
-`vX.Y.Z`.
+Bump `version` in `.claude-plugin/plugin.json` and merge: the marketplace follows `main`, and users update when the
+version changes.
 
 ## License
 
