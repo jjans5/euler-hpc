@@ -10,7 +10,7 @@
 #SBATCH --mem-per-cpu=4g            # per CPU. Do NOT use --mem (rejected on Euler)
 #SBATCH --time=04:00:00             # default 1h if unset; also selects the partition
 ##SBATCH --tmp=20g                  # node-local $TMPDIR, for heavy many-small-file I/O
-# For N parallel per-item tasks, make this an array: add `--array=0-N%K`, switch
+# For N parallel per-item tasks, make this an array: add `--array=0-N%K` (K from the user), switch
 # --output to `logs/%x-%A_%a.out`, and index work via $SLURM_ARRAY_TASK_ID (see skill).
 
 # --- GPU (uncomment): a SPECIFIC model, the default configured for the skill unless the work needs more ---
