@@ -56,8 +56,8 @@ sh tests/test_euler_jobs.sh
 
 ## Release
 
-Bump `version` in `.claude-plugin/plugin.json`, tag `vX.Y.Z`, then bump the `ref` in
-[quadbio/claude-plugins](https://github.com/quadbio/claude-plugins).
+Bump `version` in `.claude-plugin/plugin.json` and merge: the marketplace follows `main`, and users update when the
+version changes.
 
 ## License
 
