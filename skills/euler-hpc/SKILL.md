@@ -114,9 +114,9 @@ echo "submitted $JOBID"
   user, and duplicate checks and lookups go by name.
 - **Avoid duplicates:** before submitting, `squeue --me --name=<jobname>` — if one is already `PD`/`R`, don't
   resubmit.
-- **Which session submitted what:** `sbatch` and `salloc` run from this session's shell tag the job with
-  `--comment=$EULER_HPC_TAG`; a script that calls `sbatch` itself should pass that flag too. `euler-jobs --mine`
-  lists this session's jobs, `euler-jobs` everyone's by session (the user runs it as `/euler-hpc:jobs`).
+- **Which session submitted what:** `euler-jobs` reads a job's session from the environment Slurm stores with it,
+  so keep `--export` at its default (add variables as `--export=ALL,VAR=…`). `euler-jobs --mine` lists this
+  session's jobs, `euler-jobs` all sessions' (the user runs it as `/euler-hpc:jobs`).
 - **Chain steps:** `sbatch -d afterok:"$JOBID" next.sh` starts only after that job succeeded.
 - **Poll, never block.** Do **not** use `tail -f` or `watch` — they hang a tool call until timeout. Take
   snapshots instead:
