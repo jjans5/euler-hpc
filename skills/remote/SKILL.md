@@ -2,11 +2,12 @@
 name: remote
 description: >-
   Reach Euler from a session that is not running on Euler (a laptop, a workstation, another server): run commands
-  there, look at files and quotas, copy data to or from Euler, and set up or restore the shared SSH connection
-  (essh, euler-reconnect). Trigger on "check on Euler", "what's in /cluster/…", "copy this to/from Euler", "download
-  the results", "is the Euler connection up?", "Session open refused", "master is down", "set up Euler access on
-  this machine", or any Euler request from a machine whose hostname doesn't start with eu-. For Slurm jobs, also
-  load the euler-hpc skill and send its commands through essh.
+  there, look at files and quotas, copy data to or from Euler, submit and check Slurm jobs, and set up or restore
+  the shared SSH connection (essh, euler-reconnect). Trigger on "check on Euler", "what's in /cluster/…", "copy
+  this to/from Euler", "download the results", "submit this on Euler", "is my Euler job done?", "is the Euler
+  connection up?", "Session open refused", "master is down", "set up Euler access on this machine", or any Euler
+  request from a machine whose hostname doesn't start with eu-. For jobs, also load the euler-hpc skill for the
+  Slurm rules and send its commands through essh.
 ---
 
 # Euler from another machine
