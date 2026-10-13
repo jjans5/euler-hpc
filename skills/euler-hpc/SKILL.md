@@ -5,8 +5,8 @@ description: >-
   allocations and the submit → monitor → logs loop, which session submitted which job, installing software and
   Python environments, containers, moving data in and out. Trigger on "run this on the cluster", "submit a job",
   "sbatch this", "run on a GPU", "run this for every sample", "hold a node", "is my job done?", "why did my job
-  fail?", "which session started this job?", "install X on Euler", "copy this to/from Euler", also from a laptop
-  or workstation ("check my Euler jobs", "how much of my quota is left?"). The rules for every session (node,
+  fail?", "which session started this job?", "install X on Euler", "copy this to/from Euler". From a laptop or
+  another server, use it together with the remote skill. The rules for every session (node,
   allocation, storage, snapshots, cancelling) come from this plugin's session-start context.
 ---
 
@@ -16,9 +16,8 @@ How to run work on Euler. The session-start context holds the rules for every se
 `${CLAUDE_PLUGIN_ROOT}/hooks/session_context.md`. Docs paths below are relative to https://docs.hpc.ethz.ch; read
 the page when you need more than the summary here.
 
-**Not on Euler?** If `hostname` doesn't start with `eu-`, this session runs on another machine: send every command
-below through `essh` (this plugin's `bin/`), never raw `ssh`, and read `references/off-cluster.md` first. It covers
-Euler's limit of about 10 sessions per connection, MFA logins, and setup.
+**Not on Euler?** If `hostname` doesn't start with `eu-`, load the `remote` skill first and send every command below
+through `essh`, never raw `ssh`.
 
 Work that doesn't fit this session's allocation takes one of three shapes: one **batch job**, a **job array** for
 many near-identical items, or an **interactive allocation** to iterate on a node. Each has a section below.
@@ -268,5 +267,5 @@ If `$SLURM_JOB_ID` is set (the session-start context says so), this session is i
 - Inside a job: plain `srun` is a step of this job; new allocations via `salloc`/`sbatch`; clear `SLURM_*` for
   `srun --jobid`.
 - Template: `assets/euler_job.sh`.
-- Off Euler: every command through `essh` (`references/off-cluster.md`). Sizing and caps: `references/cost.md`,
+- Off Euler: the `remote` skill, every command through `essh`. Sizing and caps: `references/cost.md`,
   `euler-caps`.

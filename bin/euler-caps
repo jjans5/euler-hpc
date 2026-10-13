@@ -3,10 +3,10 @@
 # Caps (QOS maxtrespu) change without notice, so read them here instead of copying them anywhere.
 #   On Euler:            euler-caps [--all] [account]
 #   From another host:   essh 'bash -s' < "$(command -v euler-caps)"   (add -- --all after -s for all partitions)
-# Default: GPU partitions (gpu, gpuhe, gpupr) and normal; --all adds bigmem, hpc, ultramem.
+# Default: GPU partitions (gpu, gpuhe, gpupr, cuda13pr) and normal; --all adds bigmem, hpc, ultramem.
 # Default account: every shareholder account you belong to (public excluded).
 set -u
-parts='gpu|gpuhe|gpupr|normal'; [ "${1:-}" = "--all" ] && { parts='[a-z0-9]+'; shift; }
+parts='gpu|gpuhe|gpupr|cuda13pr|normal'; [ "${1:-}" = "--all" ] && { parts='[a-z0-9]+'; shift; }
 accts=${1:-$(sacctmgr -nP show assoc user="$USER" format=account 2>/dev/null | grep -v -x public | sort -u)}
 [ -z "$accts" ] && { echo "euler-caps: no shareholder account found for $USER" >&2; exit 1; }
 echo "Per-user caps (running at once, shared by all your jobs and agents), $(date +%F):"
@@ -22,9 +22,14 @@ for a in $accts; do
   done
 done
 echo
-echo "Your jobs now (state, partition, count, CPUs, GPUs):"
-squeue -u "$USER" -h -o '%T|%P|%C|%b' 2>/dev/null | awk -F'|' '{g=0; if (match($4,/gpu[^,]*:([0-9]+)$/)) {n=split($4,a,":"); g=a[n]+0} else if ($4 ~ /gpu/) g=1
-  k=$1" "$2; n_[k]++; c_[k]+=$3; g_[k]+=g; any=1} END {if (!any) print "  none"; for (k in n_) printf "  %-28s %4d jobs %6d CPUs %4d GPUs\n", k, n_[k], c_[k], g_[k]}' | sort
+echo "Your jobs now (account, state, partition: count, CPUs, GPUs):"
+# %b is a comma list such as gres/gpu:rtx_4090:4,gres/gpumem:24G: count only the gpu entry, never gpumem.
+squeue -u "$USER" -h -o '%a|%T|%P|%C|%b' 2>/dev/null | awk -F'|' '
+  { g = 0; ne = split($5, e, ",")
+    for (j = 1; j <= ne; j++) { x = e[j]; sub(/^gres[\/:]/, "", x)
+      if (x ~ /^gpu([:=]|$)/) { n = split(x, a, /[:=]/); g += (a[n] ~ /^[0-9]+$/) ? a[n] : 1 } }
+    k = $1" "$2" "$3; n_[k]++; c_[k] += $4; g_[k] += g; any = 1 }
+  END { if (!any) print "  none"; for (k in n_) printf "  %-40s %4d jobs %6d CPUs %4d GPUs\n", k, n_[k], c_[k], g_[k] }' | sort
 pend=$(squeue -u "$USER" -h -t PD -o '%r' 2>/dev/null | grep -c 'QOSMax')
 [ "$pend" -gt 0 ] && echo "  $pend pending job(s) are held by a per-user cap (QOSMax*): shrink requests or wait."
 exit 0

@@ -44,7 +44,12 @@ T=${ESSH_TIMEOUT:-120}
 WAIT=${ESSH_WAIT:-600}
 MAXT=900
 DIR=/tmp/essh-$(id -u)
-mkdir -p "$DIR" && chmod 700 "$DIR"
+# Slot locks, logs and stderr live here: it must be ours and private, or another user on a shared
+# machine could pre-create it and plant symlinks that our writes would follow.
+mkdir -m 700 "$DIR" 2>/dev/null
+if [ -L "$DIR" ] || [ ! -d "$DIR" ] || [ ! -O "$DIR" ] || ! chmod 700 "$DIR" 2>/dev/null; then
+    echo "essh: $DIR is not a private directory owned by you; remove it and try again" >&2; exit 2
+fi
 
 # Called by rsync -e: args are [ssh opts...] euler-agents rsync --server ...
 if [[ "$*" == *" rsync --server "* || "$1 $2" == *"rsync --server"* ]]; then
@@ -63,7 +68,7 @@ fi
 CMD="$*"
 
 # No ~/.ssh/config entry for $HOST (ssh -G then echoes the alias as hostname):
-# use the Host block settings from references/off-cluster.md. Must match euler-reconnect.
+# use the Host block settings from skills/remote/SKILL.md. Must match euler-reconnect.
 # ControlMaster=auto: if Euler accepts this machine's SSH key without MFA, the first
 # call becomes the shared master; otherwise BatchMode fails fast -> euler-reconnect.
 SSH_OPTS=()
@@ -71,7 +76,7 @@ if [ "$(ssh -G "$HOST" 2>/dev/null | awk '/^hostname /{print $2}')" = "$HOST" ];
     if [ -z "$EULER_USER" ]; then
         echo "essh: no Euler username configured. Ask the user for their ETH username, then either" >&2
         echo "  mkdir -p ~/.config/euler-hpc && echo 'EULER_USER=<eth-username>' > ~/.config/euler-hpc/config.env" >&2
-        echo "  or add a 'Host $HOST' block to ~/.ssh/config (skills/euler-hpc/references/off-cluster.md)" >&2
+        echo "  or add a 'Host $HOST' block to ~/.ssh/config (skills/remote/SKILL.md)" >&2
         exit 78
     fi
     SSH_OPTS=(-o HostName=euler.ethz.ch -o User="$EULER_USER" -o ControlPath="/tmp/ssh-mux-%i-$HOST"
@@ -103,7 +108,7 @@ trap '[ -n "$LOCKDIR" ] && rm -rf "$LOCKDIR"' EXIT
 trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 acquire() {
     local i d p
-    for i in $(seq 1 "$SLOTS"); do
+    for (( i = 1; i <= SLOTS; i++ )); do
         if command -v flock >/dev/null 2>&1; then
             exec 9>"$DIR/slot$i"
             if flock -n 9; then SLOT=$i; return 0; fi
