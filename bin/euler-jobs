@@ -12,6 +12,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import socket
 import subprocess
 import time
@@ -21,6 +22,7 @@ from pathlib import Path
 
 CLAUDE = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
 FAILED = {"FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "BOOT_FAIL", "DEADLINE", "PREEMPTED"}
+ENDED = FAILED | {"COMPLETED", "CANCELLED"}
 NOW = time.time()
 
 
@@ -70,14 +72,15 @@ def spread(values: list, fmt) -> str:
 
 
 def tasks(job_id: str) -> int:
-    """How many array tasks an id like 123_[1-10%2,15] stands for."""
+    """How many array tasks an id like 123_[1-10%2,15,20-30:5] stands for."""
     m = re.search(r"_\[([^\]]+)\]", job_id)
     if not m:
         return 1
     n = 0
     for part in m[1].split("%")[0].split(","):
+        part, _, step = part.partition(":")
         lo, _, hi = part.partition("-")
-        n += int(hi) - int(lo) + 1 if hi else 1
+        n += (int(hi) - int(lo)) // int(step or 1) + 1 if hi else 1
     return n
 
 
@@ -99,26 +102,26 @@ def jobs(hours: int) -> list[dict]:
             rows.append({
                 "id": v[0], "state": v[1], "elapsed": seconds(v[2]), "limit": seconds(v[3]), "submit": stamp(v[4]),
                 "start": stamp(v[5]), "reason": v[6], "node": v[7], "gpus": gpus(v[8] + "," + v[9]),
-                "cpus": v[10], "name": v[11],
+                "cpus": v[10], "name": v[11], "live": True,
             })  # fmt: skip
     live = {r["id"] for r in rows}
-    fields = "JobID,State,Elapsed,Timelimit,Submit,End,ReqTRES,WorkDir,StdOut,JobName"
+    fields = "JobID,JobIDRaw,State,Elapsed,Timelimit,Submit,End,ReqTRES,WorkDir,StdOut,JobName"
     sacct = ["sacct", "-X", "-n", "-P", f"--format={fields}"]
     lines = run([*sacct, f"--starttime=now-{hours}hours"]).splitlines()
     if missing := live - {line.split("|", 1)[0] for line in lines}:  # queued since before the window
         more = run([*sacct, "-j", ",".join(sorted({re.split(r"[_+]", i)[0] for i in missing}))]).splitlines()
         lines += [line for line in more if line.split("|", 1)[0] in missing]
     for line in lines:
-        v = line.split("|", 9)
-        if len(v) < 10:
+        v = line.split("|", 10)
+        if len(v) < 11:
             continue
         if v[0] in live:  # squeue has the live state; sacct adds where the job runs from and logs to
-            next(r for r in rows if r["id"] == v[0]).update(workdir=v[7], tres=v[6])
-        elif v[1].split(" ")[0] not in ("PENDING", "RUNNING", "REQUEUED", "SUSPENDED"):
+            next(r for r in rows if r["id"] == v[0]).update(workdir=v[8], tres=v[7])
+        elif v[2].split(" ")[0] in ENDED:
             rows.append({
-                "id": v[0], "state": v[1].split(" ")[0], "elapsed": seconds(v[2]), "limit": seconds(v[3]),
-                "submit": stamp(v[4]), "end": stamp(v[5]), "tres": v[6], "workdir": v[7], "stdout": v[8],
-                "name": v[9],
+                "id": v[0], "raw": v[1], "state": v[2].split(" ")[0], "elapsed": seconds(v[3]),
+                "limit": seconds(v[4]), "submit": stamp(v[5]), "end": stamp(v[6]), "tres": v[7], "workdir": v[8],
+                "stdout": v[9], "name": v[10], "live": False,
             })  # fmt: skip
     for r in rows:
         r["base"] = re.split(r"[_+]", r["id"])[0]
@@ -169,7 +172,7 @@ def registry() -> dict[str, dict]:
 
 
 def children() -> dict[str, list[str]]:
-    """The commands Claude Code's shells run (the `eval '…'` in each one's command line), by parent pid."""
+    """The commands Claude Code's shells run (the word after `eval` in each one's command line), by parent pid."""
     found = {}
     for stat in Path("/proc").glob("[0-9]*/stat"):
         try:
@@ -177,8 +180,14 @@ def children() -> dict[str, list[str]]:
             cmdline = (stat.parent / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
         except (OSError, IndexError):
             continue
-        if m := re.search(r"eval '((?:[^']|'\\'')*)'", cmdline):
-            found.setdefault(ppid, []).append(m[1].replace("'\\''", "'"))
+        _, shell, rest = cmdline.partition(" eval ")
+        if shell:
+            word = shlex.shlex(rest, posix=True)
+            word.whitespace_split = True
+            try:
+                found.setdefault(ppid, []).append(word.get_token())
+            except ValueError:
+                continue
     return found
 
 
@@ -279,11 +288,11 @@ def families(js: list[dict], cap: int = 4) -> str:
 
 
 def summary(js: list[dict]) -> list[str]:
-    """At most three lines on a group of jobs: running, pending, ended."""
+    """At most five lines on a group of jobs: running (and other live states), pending, ended."""
     lines = []
-    running = [j for j in js if j["state"] == "RUNNING"]
+    running = [j for j in js if j["live"] and j["state"] != "PENDING"]
     pending = [j for j in js if j["state"] == "PENDING"]
-    ended = [j for j in js if j["state"] not in ("RUNNING", "PENDING")]
+    ended = [j for j in js if not j["live"]]
     if running:
         detail = [g for g in dict.fromkeys(j["gpus"] for j in running) if g][:2]
         up = spread([j["elapsed"] or 0 for j in running], span)
@@ -318,14 +327,14 @@ def summary(js: list[dict]) -> list[str]:
 
 def job_line(j: dict) -> str:
     """One job, for --jobs: id, name, state and what matters for that state."""
-    if j["state"] == "RUNNING":
-        detail = f"up {span(j['elapsed'] or 0)}" + (f" of {span(j['limit'])}" if j["limit"] else "")
-        detail += f" on {j['node']}"
-    elif j["state"] == "PENDING":
+    if j["state"] == "PENDING":
         detail = ", ".join(x for x in (
             f"queued {span(NOW - j['submit'])}" if j.get("submit") else "", j.get("reason", ""),
             f"est. start {clock(j['start'])}" if j.get("start") else "",
         ) if x)  # fmt: skip
+    elif j["live"]:
+        detail = f"up {span(j['elapsed'] or 0)}" + (f" of {span(j['limit'])}" if j["limit"] else "")
+        detail += f" on {j['node']}"
     else:
         detail = f"ended {clock(j['end'])}" if j.get("end") else ""
         if j.get("stdout"):
@@ -336,7 +345,7 @@ def job_line(j: dict) -> str:
 def log(j: dict) -> str:
     """A job's output file, with Slurm's %j, %x, %A, %a, %u expanded."""
     base, _, task = j["id"].partition("_")
-    subs = {"j": j["id"] if not task else base, "x": j["name"], "A": base, "a": task, "u": os.environ.get("USER", "")}
+    subs = {"j": j.get("raw") or base, "x": j["name"], "A": base, "a": task, "u": os.environ.get("USER", "")}
     path = re.sub(r"%(\w)", lambda m: subs.get(m[1], m[0]), j["stdout"])
     if not path.startswith("/") and j.get("workdir"):
         path = f"{j['workdir']}/{path}"
@@ -386,12 +395,12 @@ def main() -> None:
     if args.mine:
         shown = [own] if own else []
         rows = [r for r in rows if r["session"] == own]
-    procs = children() if any(known.get(sid, {}).get("alive") for sid in shown if sid != own) else {}
+    procs = children() if any(known.get(sid, {}).get("alive") for sid in shown) else {}
     info = {}
     for sid in shown:
         entry = known.get(sid, {})
-        cmds = procs.get(str(entry.get("pid")), []) if entry.get("alive") and sid != own else []
-        info[sid] = transcript(sid, cmds) | {"live": cmds}
+        cmds = [c for c in procs.get(str(entry.get("pid")), []) if "euler-jobs" not in c] if entry.get("alive") else []
+        info[sid] = transcript(sid, cmds) | {"cmds": cmds}
     states = pr_states({pr for i in info.values() for pr in i["prs"]}) if not args.mine else {}
 
     by_session = {sid: [r for r in rows if r["session"] == sid] for sid in shown}
@@ -414,7 +423,7 @@ def main() -> None:
         since = NOW - entry.get("statusUpdatedAt", NOW * 1000) / 1000
         word = {"busy": "working", "waiting": "waiting for you"}.get(entry.get("status"), f"idle {span(since)}")
         commands = {}
-        for c in i["live"]:
+        for c in i["cmds"]:
             kind, text = i["commands"].get(c, ("running", c[:60]))
             commands.setdefault(kind, []).append(text)
         texts = {kind: texts[:3] + [f"+{len(texts) - 3} more"] * (len(texts) > 3) for kind, texts in commands.items()}
@@ -433,21 +442,22 @@ def main() -> None:
             attention.append(f"! {who}: {j['name']} {j['id']} {j['state']}{oom}; log {log(j)}")
         if len(failed) > 3:
             attention.append(f"! {who}: {len(failed) - 3} more failed (euler-jobs --jobs)")
-        live = [j for j in js if j["state"] in ("RUNNING", "PENDING")]
+        live = [j for j in js if j["live"]]
         if entry.get("local") and not entry.get("alive") and live:
             attention.append(f"! {who} is closed but has {sum(j['n'] for j in live)} jobs queued or running")
         if entry.get("alive") and entry.get("status") == "waiting" and sid != own:
             attention.append(f"! {who} is waiting for you")
         ends = [j["end"] for j in js if j.get("end")]
         idle_since = entry.get("statusUpdatedAt", 0) / 1000
-        if entry.get("alive") and entry.get("status") in ("idle", "shell") and not live and not info[sid]["live"]:
+        if entry.get("alive") and entry.get("status") in ("idle", "shell") and not live and not info[sid]["cmds"]:
             if ends and max(ends) > idle_since:
                 attention.append(f"! {who}: its jobs ended at {clock(max(ends))}, after it went idle")
 
-    counts = Counter(r["state"] for r in rows for _ in range(r["n"]))
-    failed = sum(k for s, k in counts.items() if s in FAILED)
+    pending = sum(r["n"] for r in rows if r["state"] == "PENDING")
+    running = sum(r["n"] for r in rows if r["live"]) - pending
+    failed = sum(r["n"] for r in rows if r["state"] in FAILED)
     head = [time.strftime("%H:%M"), f"{sum(e['alive'] for e in known.values())} open sessions"]
-    head += [f"{counts['RUNNING']} running", f"{counts['PENDING']} pending", f"{failed} failed in {args.hours}h"]
+    head += [f"{running} running", f"{pending} pending", f"{failed} failed in {args.hours}h"]
     print("Euler jobs · " + " · ".join(head))
     for job, n in hosts.items() if not args.mine else []:
         j = host_jobs.get(job)
@@ -458,7 +468,7 @@ def main() -> None:
         print("\n".join(f"  {a}" for a in attention))
 
     order = sorted(shown, key=lambda s: (
-        not any(j["state"] in ("RUNNING", "PENDING") for j in by_session[s]), not by_session[s],
+        not any(j["live"] for j in by_session[s]), not by_session[s],
         -(known.get(s, {}).get("updatedAt") or 0),
     ))  # fmt: skip
     for sid in order:
@@ -480,7 +490,7 @@ def main() -> None:
             print(f"  ({guessed} of these jobs matched by directory only)")
         if args.jobs or args.mine:
             for j in js:
-                if j["state"] in ("RUNNING", "PENDING") or j["state"] in FAILED:
+                if j["live"] or j["state"] in FAILED:
                     print(job_line(j))
     if unlinked:
         print("\nNot from a Claude session")
@@ -488,7 +498,7 @@ def main() -> None:
             print(f"  {line}")
         if args.jobs:
             for j in unlinked:
-                if j["state"] in ("RUNNING", "PENDING") or j["state"] in FAILED:
+                if j["live"] or j["state"] in FAILED:
                     print(job_line(j))
     if not shown and not unlinked:
         print("No jobs and no open sessions.")
