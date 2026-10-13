@@ -39,7 +39,8 @@ Start from `assets/euler_job.sh`. Euler-specific Slurm rules:
   submit from more than one place, or from a directory that may be deleted.
 - **Paths:** the job starts in the submit directory. Pass anything that differs per machine or checkout at submit
   (`sbatch --export=ALL,MAIN="$main" job.sh`, or as script arguments) instead of hardcoding it in the script;
-  some repos' guards refuse absolute paths in scripts.
+  some repos' guards refuse absolute paths in scripts. Slurm runs a copy of the script from its spool directory,
+  so `$BASH_SOURCE` and `$0` don't point into your checkout.
 - **Shared storage only.** The job runs on another node, so its working directory, inputs and log directory must
   be on home, project, work or scratch storage — never under `$TMPDIR` or `/tmp`, which are node-local (an
   agent's own scratch directory often is) — and must still exist when the job runs: don't remove a git worktree
@@ -49,6 +50,7 @@ Start from `assets/euler_job.sh`. Euler-specific Slurm rules:
   hands the job your submit environment, `PATH` included, but the job shell doesn't source `~/.bashrc`. If the
   manager isn't on `PATH` where you submit, or you pass `--export=NONE`, use its absolute path (`command -v pixi`).
 - **In-job internet:** add `module load eth_proxy` only if the job downloads or talks to an online service.
+  Python `aiohttp` ignores the proxy unless its session is created with `trust_env=True`.
 - **Heavy many-small-file I/O:** stage to node-local **`$TMPDIR`** (request size with `--tmp=<size>`), compute
   there, copy results back — don't hammer shared storage.
 
@@ -72,7 +74,9 @@ pixi run python scripts/run_me.py     # runs in the submit directory
 - **Request a specific GPU model**, not a bare `--gpus=1`: queues differ by model, and which models you can get
   depends on your shareholder group. From the user's plugin settings: default model "${user_config.gpu_model}",
   fallback "${user_config.gpu_fallback}". If one is empty or an unfilled placeholder, or the work needs more VRAM
-  than it has, ask the user; they can save defaults with `/plugin configure euler-hpc@quadbio`.
+  than it has, ask the user; they can save defaults with `/plugin configure euler-hpc@quadbio`. Use the short
+  model names listed below: the full name `sinfo` shows (`nvidia_geforce_rtx_4090`) is accepted but silently
+  becomes a request for any GPU.
 
   ```bash
   #SBATCH --gpus=<model>:1
@@ -119,6 +123,8 @@ echo "submitted $JOBID"
 
   Cadence: ~30–60 s for short jobs, a few minutes for long ones. Stop when `sacct` `State` leaves
   `PENDING`/`RUNNING`. Cancel with `scancel "$JOBID"`.
+- **Check early, unasked:** once the expensive step should have started, read the log for progress and warnings
+  (OOM, NCCL) and check GPU use. A smoke test on one GPU doesn't cover a run on several.
 - **Right-size the next run:** compare `MaxRSS` and `Elapsed` with what you asked for;
   `get_inefficient_jobs --for-last-hours 24` lists your jobs that wasted CPU, RAM or GPU.
 
@@ -148,7 +154,7 @@ no-dependency, built-in way; for complex multi-parameter sweeps, if the project 
 
 ```bash
 #SBATCH --array=0-9              # 10 tasks (indices 0..9). Also a list "0,3,5" or step "0-18:2"
-#SBATCH --array=0-99%10          # throttle: at most 10 tasks run at once
+#SBATCH --array=0-99%10          # cap: at most 10 tasks run at once
 #SBATCH --output=logs/%x-%A_%a.out   # %A=array job id, %a=task index — NOT %j (which would collide)
 ```
 
@@ -162,8 +168,9 @@ pixi run python scripts/process.py --sample "$S"
 # LINE=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" inputs.txt)
 ```
 
-All tasks share `$SLURM_ARRAY_JOB_ID`. The `%N` throttle keeps tasks beyond the cap `PENDING` with reason
-`JobArrayTaskLimit` — use it so you don't hammer the shared proxy or your fair-share. Monitor/cancel by the array
+All tasks share `$SLURM_ARRAY_JOB_ID`. The `%N` cap keeps tasks beyond it `PENDING` with reason
+`JobArrayTaskLimit`. Before submitting a large array, ask the user for the cap: their other sessions' jobs queue
+behind it on the same fair-share, and only they know what else is running. Monitor/cancel by the array
 id: `squeue -j <A>`, `sacct -j <A>`; `scancel <A>` kills the whole array, `scancel <A>_<a>` one task. Use `%A_%a`
 in `--output` so each task writes its own log (and still `mkdir -p logs` first).
 
@@ -211,6 +218,7 @@ If `$SLURM_JOB_ID` is set (the session-start context says so), this session is i
 
 - **Modules:** if `module avail` doesn't list a package, `module spider <name>` shows what to load first. The
   newest stack can be Spack-only, without modules. (`/software/environment-modules/`, `/software/software-stack/`)
+  Rendering PDFs to images, for example: `module spider poppler` (`pdftoppm`) or `ghostscript`.
 - **Python:** use the project's environment manager (pixi, uv). Without one, a venv on a stack's `python` module.
   Before Python 3.13, `ThreadPool()` ignores the job's CPU limit: pass `processes=len(os.sched_getaffinity(0))`.
   (`/software/proglang/python/`)
@@ -243,8 +251,8 @@ If `$SLURM_JOB_ID` is set (the session-start context says so), this session is i
 - `mkdir -p logs && JOBID=$(sbatch --parsable job.sh)`; poll `euler-jobs --mine`/`sacct`/`sstat`, never
   `tail -f`. Cancel only this session's jobs.
 - Job names carry the task (`-J <task>-…`); paths come in at submit, not hardcoded; run scripts the project's way.
-- Parallel per-item work: `--array=0-N%K` + `$SLURM_ARRAY_TASK_ID` + `--output=…%A_%a.out` (or the project's
-  sweep launcher).
+- Parallel per-item work: `--array=0-N%K` (ask the user for `K`) + `$SLURM_ARRAY_TASK_ID` +
+  `--output=…%A_%a.out` (or the project's sweep launcher).
 - Inside a job: plain `srun` is a step of this job; new allocations via `salloc`/`sbatch`; clear `SLURM_*` for
   `srun --jobid`.
 - Template: `assets/euler_job.sh`.
