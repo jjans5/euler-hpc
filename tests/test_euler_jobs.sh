@@ -17,7 +17,10 @@ cat >"$tmp/bin/squeue" <<'EOF'
 echo '101|RUNNING|1:00:00|4:00:00|2026-01-01T10:00:00|2026-01-01T10:00:00|None|eu-g1-1|gres/gpu:nvidia_rtx_4090:1|N/A|8|train_1|'
 echo '102|RUNNING|2:00|5-00:00:00|2026-01-01T10:00:00|2026-01-01T10:00:00|None|eu-a2p-1|N/A|N/A|8|tunnel|'
 echo '103|PENDING|0:00|1:00:00|2026-01-01T10:00:00|N/A|Priority|N/A|N/A|N/A|1|prep|'
-echo '104|SUSPENDED|0:10|1:00:00|2026-01-01T10:00:00|2026-01-01T10:00:00|None|eu-g1-2|N/A|N/A|1|hold_1|'
+case "$*" in *"-t all"*)  # squeue lists suspended and recently ended jobs only when asked for all states
+	echo '104|SUSPENDED|0:10|1:00:00|2026-01-01T10:00:00|2026-01-01T10:00:00|None|eu-g1-2|N/A|N/A|1|hold_1|'
+	echo '97|COMPLETED|10:00|1:00:00|2026-01-01T09:00:00|2026-01-01T09:00:00|None|eu-g1-3|N/A|N/A|1|manual|' ;;
+esac
 echo '200_[1-10]|PENDING|0:00|1:00:00|2026-01-01T10:00:00|N/A|Resources|N/A|N/A|N/A|8|sweep|'
 echo '300_[0-18:2]|PENDING|0:00|1:00:00|2026-01-01T10:00:00|N/A|Resources|N/A|N/A|N/A|8|steps|'
 EOF

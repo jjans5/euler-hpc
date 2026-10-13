@@ -96,9 +96,10 @@ def jobs(hours: int) -> list[dict]:
     """Queued and running jobs from squeue, then those that ended in the last ``hours`` from sacct."""
     rows = []
     fields = "JobID State TimeUsed TimeLimit SubmitTime StartTime Reason NodeList tres-per-job tres-per-node NumCPUs"
-    for line in run(["squeue", "--me", "-h", "-O", ",".join(f + ":|" for f in [*fields.split(), "Name"])]).splitlines():
+    squeue = ["squeue", "--me", "-h", "-t", "all", "-O", ",".join(f + ":|" for f in [*fields.split(), "Name"])]
+    for line in run(squeue).splitlines():
         v = [x.strip() for x in line.removesuffix("|").split("|", 11)]
-        if len(v) == 12:
+        if len(v) == 12 and v[1] not in ENDED:  # ended jobs come from sacct
             rows.append({
                 "id": v[0], "state": v[1], "elapsed": seconds(v[2]), "limit": seconds(v[3]), "submit": stamp(v[4]),
                 "start": stamp(v[5]), "reason": v[6], "node": v[7], "gpus": gpus(v[8] + "," + v[9]),
